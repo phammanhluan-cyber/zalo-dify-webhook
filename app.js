@@ -24,7 +24,7 @@ app.post('/webhook', async (req, res) => {
             const difyResponse = await axios.post(`${DIFY_API_URL}/chat-messages`, {
                 inputs: {},
                 query: userMessage,
-                response_mode: 'blocking',
+                response_mode: 'streaming',
                 user: userId
             }, {
                 headers: {
