@@ -12,14 +12,11 @@ app.post('/webhook', async (req, res) => {
     res.status(200).send('OK');
     
     const event = req.body;
-    console.log('Received Zalo Event:', JSON.stringify(event));
-
     if (event.event_name === 'user_send_text') {
         const userId = event.sender.id;
         const userMessage = event.message.text;
 
         try {
-            // 1. Gọi Dify AI
             console.log('Sending to Dify...');
             const difyResponse = await axios.post(`${DIFY_API_URL}/chat-messages`, {
                 inputs: {},
@@ -30,25 +27,48 @@ app.post('/webhook', async (req, res) => {
                 headers: {
                     'Authorization': `Bearer ${DIFY_API_KEY}`,
                     'Content-Type': 'application/json'
+                },
+                responseType: 'stream'
+            });
+
+            let replyText = '';
+            
+            difyResponse.data.on('data', chunk => {
+                const lines = chunk.toString().split('\n');
+                for (const line of lines) {
+                    if (line.startsWith('data: ')) {
+                        try {
+                            const data = JSON.parse(line.substring(6));
+                            // Hỗ trợ lấy text từ cả Agent lẫn Chatflow
+                            if (data.answer) {
+                                replyText += data.answer;
+                            } else if (data.event === 'agent_message' && data.thought) {
+                                replyText += data.thought;
+                            }
+                        } catch (e) {}
+                    }
                 }
             });
 
-            const replyText = difyResponse.data.answer;
-            console.log('Dify Answer:', replyText);
-
-            // 2. Gửi phản hồi lại Zalo
-            console.log('Sending reply to Zalo...');
-            await axios.post('https://openapi.zalo.me/v2.0/oa/message', {
-                recipient: { user_id: userId },
-                message: { text: replyText }
-            }, {
-                headers: {
-                    'access_token': ZALO_ACCESS_TOKEN,
-                    'Content-Type': 'application/json'
+            difyResponse.data.on('end', async () => {
+                console.log('Dify Final Answer:', replyText);
+                if (replyText.trim()) {
+                    console.log('Sending reply to Zalo...');
+                    const zaloRes = await axios.post('https://openapi.zalo.me/v2.0/oa/message', {
+                        recipient: { user_id: userId },
+                        message: { text: replyText }
+                    }, {
+                        headers: {
+                            'access_token': ZALO_ACCESS_TOKEN,
+                            'Content-Type': 'application/json'
+                        }
+                    });
+                    console.log('Zalo Response:', zaloRes.data);
+                } else {
+                    console.log('No answer generated from Dify.');
                 }
             });
 
-            console.log('Successfully sent message to Zalo!');
         } catch (error) {
             console.error('Error processing message:', error.response ? error.response.data : error.message);
         }
