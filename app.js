@@ -9,11 +9,13 @@ const DIFY_API_KEY = process.env.DIFY_API_KEY;
 const DIFY_API_URL = process.env.DIFY_API_URL || 'https://api.dify.ai/v1';
 
 app.post('/webhook', async (req, res) => {
+    // Trả lời Zalo Webhook ngay lập tức
     res.status(200).send('OK');
     
     const event = req.body;
     if (event.event_name === 'user_send_text') {
         const userId = event.sender.id;
+        const msgId = event.message.msg_id; // Lấy message_id để reply
         const userMessage = event.message.text;
 
         try {
@@ -39,7 +41,6 @@ app.post('/webhook', async (req, res) => {
                     if (line.startsWith('data: ')) {
                         try {
                             const data = JSON.parse(line.substring(6));
-                            // Hỗ trợ lấy text từ cả Agent lẫn Chatflow
                             if (data.answer) {
                                 replyText += data.answer;
                             } else if (data.event === 'agent_message' && data.thought) {
@@ -53,16 +54,23 @@ app.post('/webhook', async (req, res) => {
             difyResponse.data.on('end', async () => {
                 console.log('Dify Final Answer:', replyText);
                 if (replyText.trim()) {
-                    console.log('Sending reply to Zalo...');
+                    console.log('Sending reply to Zalo using message_id...');
+                    
+                    // Gửi tin nhắn phản hồi theo dạng Reply Quote Message
                     const zaloRes = await axios.post('https://openapi.zalo.me/v2.0/oa/message', {
-                        recipient: { user_id: userId },
-                        message: { text: replyText }
+                        recipient: { 
+                            message_id: msgId 
+                        },
+                        message: { 
+                            text: replyText 
+                        }
                     }, {
                         headers: {
                             'access_token': ZALO_ACCESS_TOKEN,
                             'Content-Type': 'application/json'
                         }
                     });
+                    
                     console.log('Zalo Response:', zaloRes.data);
                 } else {
                     console.log('No answer generated from Dify.');
