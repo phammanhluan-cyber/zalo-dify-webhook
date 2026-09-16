@@ -14,6 +14,25 @@ async function getTelegramFileUrl(fileId) {
     return `https://api.telegram.org/file/bot${TELEGRAM_BOT_TOKEN}/${filePath}`;
 }
 
+// Hàm chia nhỏ tin nhắn nếu vượt quá giới hạn của Telegram (4096 ký tự)
+async function sendLongMessage(chatId, text) {
+    const MAX_LENGTH = 4000;
+    if (text.length <= MAX_LENGTH) {
+        await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+            chat_id: chatId,
+            text: text
+        });
+    } else {
+        for (let i = 0; i < text.length; i += MAX_LENGTH) {
+            const chunk = text.substring(i, i + MAX_LENGTH);
+            await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+                chat_id: chatId,
+                text: chunk
+            });
+        }
+    }
+}
+
 app.post('/webhook', async (req, res) => {
     res.status(200).send('OK');
 
@@ -67,42 +86,30 @@ app.post('/webhook', async (req, res) => {
                     if (!jsonStr) continue;
                     const jsonData = JSON.parse(jsonStr);
                     
-                    // In ra log Render để kiểm tra cấu trúc thực tế của Dify Agent
-                    console.log("Dify Stream Event:", jsonData.event, JSON.stringify(jsonData));
-
-                    // Lấy dữ liệu từ bất kỳ trường nào Dify trả về nội dung
                     if (jsonData.answer) {
                         botReply += jsonData.answer;
                     } else if (jsonData.message) {
                         botReply += jsonData.message;
                     } else if (jsonData.text) {
                         botReply += jsonData.text;
-                    } else if (jsonData.thought) {
-                        botReply += jsonData.thought;
                     }
                 } catch (e) {}
             }
         }
 
         if (!botReply) {
-            botReply = "Đã nhận phản hồi từ Dify nhưng chưa trích xuất được text. Anh xem tab Logs trên Render để xem chi tiết cấu trúc nhé.";
+            botReply = "Dify đã xử lý xong nhưng không có dữ liệu trả về.";
         }
 
-        await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
-            chat_id: chatId,
-            text: botReply
-        });
+        await sendLongMessage(chatId, botReply);
 
     } catch (error) {
         console.error('Lỗi xử lý chi tiết:', error.response?.data || error.message);
-        let errorMsg = "Hệ thống gặp sự cố kết nối Dify.";
+        let errorMsg = "Hệ thống gặp sự cố kết nối Dify hoặc mô hình đang quá tải (503). Anh vui lòng thử lại sau vài giây.";
         if (error.response?.data?.message) {
-            errorMsg += ` Chi tiết: ${error.response.data.message}`;
+            errorMsg = `Lỗi từ Dify: ${error.response.data.message}`;
         }
-        await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
-            chat_id: chatId,
-            text: errorMsg
-        });
+        await sendLongMessage(chatId, errorMsg);
     }
 });
 
