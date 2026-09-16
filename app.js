@@ -28,14 +28,12 @@ app.post('/webhook', async (req, res) => {
     try {
         // Kiểm tra xem người dùng có gửi ảnh lên không
         if (update.message.photo && update.message.photo.length > 0) {
-            // Lấy bức ảnh có độ phân giải cao nhất (phần tử cuối cùng trong mảng)
             const photo = update.message.photo[update.message.photo.length - 1];
             const fileUrl = await getTelegramFileUrl(photo.file_id);
             
             console.log(`Nhận được ảnh từ Telegram [ChatID: ${chatId}], URL: ${fileUrl}`);
 
-            // Nếu Dify hỗ trợ upload file, ta tải ảnh và truyền vào inputs/files
-            // Hoặc đính kèm URL ảnh vào câu hỏi để AI đọc
+            // Chuyển sang dạng tải file trực tiếp hoặc truyền remote_url an toàn
             filesArray = [{
                 type: 'image',
                 transfer_method: 'remote_url',
@@ -45,11 +43,10 @@ app.post('/webhook', async (req, res) => {
 
         console.log(`Xử lý yêu cầu từ [ChatID: ${chatId}]: ${userMessage}`);
 
-        // Gửi sang Dify AI (hỗ trợ cả file ảnh nếu Dify App cho phép)
         const payload = {
             inputs: {},
             query: userMessage,
-            response_mode: 'streaming',
+            response_mode: 'blocking', // Chuyển sang chế độ blocking để nhận kết quả trọn vẹn, ổn định hơn stream
             user: String(chatId)
         };
 
@@ -61,39 +58,33 @@ app.post('/webhook', async (req, res) => {
             headers: {
                 'Authorization': `Bearer ${DIFY_API_KEY}`,
                 'Content-Type': 'application/json'
-            },
-            responseType: 'text'
+            }
         });
 
-        // Gom dữ liệu trả về từ luồng stream của Dify
         let botReply = '';
-        const lines = difyResponse.data.split('\n');
-        for (const line of lines) {
-            if (line.startsWith('data: ')) {
-                try {
-                    const jsonData = JSON.parse(line.substring(6));
-                    if (jsonData.answer) {
-                        botReply += jsonData.answer;
-                    }
-                } catch (e) {}
-            }
+        if (difyResponse.data && difyResponse.data.answer) {
+            botReply = difyResponse.data.answer;
         }
 
         if (!botReply) {
-            botReply = "Đã nhận ảnh nhưng hệ thống AI không trả về nội dung phân tích.";
+            botReply = "AI đã tiếp nhận nhưng chưa trả về nội dung text. Anh kiểm tra lại định dạng câu trả lời trên Dify nhé.";
         }
 
-        // Gửi kết quả về Telegram
+        // Gửi kết quả về Telegram (chia nhỏ nếu nội dung quá dài)
         await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
             chat_id: chatId,
             text: botReply
         });
 
     } catch (error) {
-        console.error('Lỗi xử lý:', error.response?.data || error.message);
+        console.error('Lỗi xử lý chi tiết:', error.response?.data || error.message);
+        let errorMsg = "Hệ thống gặp sự cố khi xử lý hình ảnh hoặc kết nối Dify.";
+        if (error.response?.data?.message) {
+            errorMsg += ` Chi tiết: ${error.response.data.message}`;
+        }
         await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
             chat_id: chatId,
-            text: "Hệ thống gặp sự cố khi xử lý hình ảnh hoặc kết nối Dify. Anh kiểm tra lại định dạng app trên Dify nhé!"
+            text: errorMsg
         });
     }
 });
