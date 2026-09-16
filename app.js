@@ -8,78 +8,97 @@ const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const DIFY_API_KEY = process.env.DIFY_API_KEY;
 const DIFY_API_URL = process.env.DIFY_API_URL || 'https://api.dify.ai/v1';
 
+// Hàm lấy đường dẫn tải ảnh từ Telegram Bot API
+async function getTelegramFileUrl(fileId) {
+    const res = await axios.get(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getFile?file_id=${fileId}`);
+    const filePath = res.data.result.file_path;
+    return `https://api.telegram.org/file/bot${TELEGRAM_BOT_TOKEN}/${filePath}`;
+}
+
 app.post('/webhook', async (req, res) => {
-    // Phản hồi ngay cho Telegram để tránh timeout
     res.status(200).send('OK');
 
     const update = req.body;
+    if (!update.message) return;
 
-    // Kiểm tra xem có tin nhắn văn bản gửi đến từ người dùng không
-    if (update.message && update.message.text) {
-        const chatId = update.message.chat.id;
-        const userMessage = update.message.text;
+    const chatId = update.message.chat.id;
+    let userMessage = update.message.text || update.message.caption || "Phân tích lỗi này giúp tôi";
+    let filesArray = [];
 
-        console.log(`Nhận tin nhắn từ Telegram [ChatID: ${chatId}]: ${userMessage}`);
-
-        try {
-            // Gửi câu hỏi sang Dify AI với chế độ streaming (bắt buộc cho Agent Chat App)
-            const difyResponse = await axios.post(`${DIFY_API_URL}/chat-messages`, {
-                inputs: {},
-                query: userMessage,
-                response_mode: 'streaming',
-                user: String(chatId)
-            }, {
-                headers: {
-                    'Authorization': `Bearer ${DIFY_API_KEY}`,
-                    'Content-Type': 'application/json'
-                },
-                responseType: 'text'
-            });
-
-            // Gom dữ liệu trả về từ luồng stream của Dify
-            let botReply = '';
-            const lines = difyResponse.data.split('\n');
-            for (const line of lines) {
-                if (line.startsWith('data: ')) {
-                    try {
-                        const jsonData = JSON.parse(line.substring(6));
-                        if (jsonData.answer) {
-                            botReply += jsonData.answer;
-                        }
-                    } catch (e) {
-                        // Bỏ qua dòng JSON lỗi hoặc sự kiện kết thúc luồng
-                    }
-                }
-            }
-
-            if (!botReply) {
-                botReply = "Xin lỗi, hệ thống AI đã phản hồi nhưng không có nội dung văn bản hiển thị.";
-            }
-
-            // Gửi câu trả lời ngược lại về Telegram cho người dùng
-            await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
-                chat_id: chatId,
-                text: botReply
-            });
-
-            console.log(`Đã trả lời tin nhắn thành công cho [ChatID: ${chatId}]`);
-
-        } catch (error) {
-            console.error('Lỗi xử lý Dify hoặc Telegram:', error.response?.data || error.message);
+    try {
+        // Kiểm tra xem người dùng có gửi ảnh lên không
+        if (update.message.photo && update.message.photo.length > 0) {
+            // Lấy bức ảnh có độ phân giải cao nhất (phần tử cuối cùng trong mảng)
+            const photo = update.message.photo[update.message.photo.length - 1];
+            const fileUrl = await getTelegramFileUrl(photo.file_id);
             
-            try {
-                await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
-                    chat_id: chatId,
-                    text: "Xin lỗi, hệ thống hỗ trợ kỹ thuật đang gặp chút gián đoạn khi kết nối với AI. Anh vui lòng thử lại sau ít phút nhé!"
-                });
-            } catch (sendErr) {
-                console.error('Không thể gửi tin nhắn báo lỗi về Telegram:', sendErr.message);
+            console.log(`Nhận được ảnh từ Telegram [ChatID: ${chatId}], URL: ${fileUrl}`);
+
+            // Nếu Dify hỗ trợ upload file, ta tải ảnh và truyền vào inputs/files
+            // Hoặc đính kèm URL ảnh vào câu hỏi để AI đọc
+            filesArray = [{
+                type: 'image',
+                transfer_method: 'remote_url',
+                url: fileUrl
+            }];
+        }
+
+        console.log(`Xử lý yêu cầu từ [ChatID: ${chatId}]: ${userMessage}`);
+
+        // Gửi sang Dify AI (hỗ trợ cả file ảnh nếu Dify App cho phép)
+        const payload = {
+            inputs: {},
+            query: userMessage,
+            response_mode: 'streaming',
+            user: String(chatId)
+        };
+
+        if (filesArray.length > 0) {
+            payload.files = filesArray;
+        }
+
+        const difyResponse = await axios.post(`${DIFY_API_URL}/chat-messages`, payload, {
+            headers: {
+                'Authorization': `Bearer ${DIFY_API_KEY}`,
+                'Content-Type': 'application/json'
+            },
+            responseType: 'text'
+        });
+
+        // Gom dữ liệu trả về từ luồng stream của Dify
+        let botReply = '';
+        const lines = difyResponse.data.split('\n');
+        for (const line of lines) {
+            if (line.startsWith('data: ')) {
+                try {
+                    const jsonData = JSON.parse(line.substring(6));
+                    if (jsonData.answer) {
+                        botReply += jsonData.answer;
+                    }
+                } catch (e) {}
             }
         }
+
+        if (!botReply) {
+            botReply = "Đã nhận ảnh nhưng hệ thống AI không trả về nội dung phân tích.";
+        }
+
+        // Gửi kết quả về Telegram
+        await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+            chat_id: chatId,
+            text: botReply
+        });
+
+    } catch (error) {
+        console.error('Lỗi xử lý:', error.response?.data || error.message);
+        await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+            chat_id: chatId,
+            text: "Hệ thống gặp sự cố khi xử lý hình ảnh hoặc kết nối Dify. Anh kiểm tra lại định dạng app trên Dify nhé!"
+        });
     }
 });
 
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => {
-    console.log(`Server is running and listening on port ${PORT}`);
+    console.log(`Server is running on port ${PORT}`);
 });
