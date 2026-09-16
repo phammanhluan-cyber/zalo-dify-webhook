@@ -4,86 +4,65 @@ const app = express();
 
 app.use(express.json());
 
-const ZALO_ACCESS_TOKEN = process.env.ZALO_ACCESS_TOKEN;
+const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const DIFY_API_KEY = process.env.DIFY_API_KEY;
 const DIFY_API_URL = process.env.DIFY_API_URL || 'https://api.dify.ai/v1';
 
 app.post('/webhook', async (req, res) => {
-    // Trả lời Zalo Webhook ngay lập tức
+    // Phản hồi ngay cho Telegram để tránh timeout (Telegram yêu cầu phản hồi nhanh 200 OK)
     res.status(200).send('OK');
-    
-    const event = req.body;
-    if (event.event_name === 'user_send_text') {
-        const userId = event.sender.id;
-        const msgId = event.message.msg_id; // Lấy message_id để reply
-        const userMessage = event.message.text;
+
+    const update = req.body;
+
+    // Kiểm tra xem có tin nhắn văn bản gửi đến từ người dùng không
+    if (update.message && update.message.text) {
+        const chatId = update.message.chat.id;
+        const userMessage = update.message.text;
+
+        console.log(`Nhận tin nhắn từ Telegram [ChatID: ${chatId}]: ${userMessage}`);
 
         try {
-            console.log('Sending to Dify...');
+            // Gửi câu hỏi sang Dify AI (sử dụng chế độ blocking để lấy thẳng câu trả lời)
             const difyResponse = await axios.post(`${DIFY_API_URL}/chat-messages`, {
                 inputs: {},
                 query: userMessage,
-                response_mode: 'streaming',
-                user: userId
+                response_mode: 'blocking',
+                user: String(chatId)
             }, {
                 headers: {
                     'Authorization': `Bearer ${DIFY_API_KEY}`,
                     'Content-Type': 'application/json'
-                },
-                responseType: 'stream'
-            });
-
-            let replyText = '';
-            
-            difyResponse.data.on('data', chunk => {
-                const lines = chunk.toString().split('\n');
-                for (const line of lines) {
-                    if (line.startsWith('data: ')) {
-                        try {
-                            const data = JSON.parse(line.substring(6));
-                            if (data.answer) {
-                                replyText += data.answer;
-                            } else if (data.event === 'agent_message' && data.thought) {
-                                replyText += data.thought;
-                            }
-                        } catch (e) {}
-                    }
                 }
             });
 
-            difyResponse.data.on('end', async () => {
-                console.log('Dify Final Answer:', replyText);
-                if (replyText.trim()) {
-                    console.log('Sending reply to Zalo using message_id...');
-                    
-                    // Gửi tin nhắn phản hồi theo dạng Reply Quote Message
-                    const zaloRes = await axios.post('https://openapi.zalo.me/v2.0/oa/message', {
-                        recipient: { 
-                            message_id: msgId 
-                        },
-                        message: { 
-                            text: replyText 
-                        }
-                    }, {
-                        headers: {
-                            'access_token': ZALO_ACCESS_TOKEN,
-                            'Content-Type': 'application/json'
-                        }
-                    });
-                    
-                    console.log('Zalo Response:', zaloRes.data);
-                } else {
-                    console.log('No answer generated from Dify.');
-                }
+            // Lấy nội dung phản hồi từ Dify AI
+            const botReply = difyResponse.data.answer || "Xin lỗi, tôi chưa nhận được câu trả lời từ hệ thống AI.";
+
+            // Gửi câu trả lời ngược lại về Telegram cho người dùng
+            await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+                chat_id: chatId,
+                text: botReply
             });
+
+            console.log(`Đã trả lời tin nhắn thành công cho [ChatID: ${chatId}]`);
 
         } catch (error) {
-            console.error('Error processing message:', error.response ? error.response.data : error.message);
+            console.error('Lỗi xử lý Dify hoặc Telegram:', error.response?.data || error.message);
+            
+            // Gửi thông báo lỗi nhẹ nhàng về Telegram nếu hệ thống gặp sự cố
+            try {
+                await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+                    chat_id: chatId,
+                    text: "Xin lỗi, hệ thống hỗ trợ kỹ thuật đang gặp chút gián đoạn khi kết nối với AI. Anh vui lòng thử lại sau ít phút nhé!"
+                });
+            } catch (sendErr) {
+                console.error('Không thể gửi tin nhắn báo lỗi về Telegram:', sendErr.message);
+            }
         }
     }
 });
 
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => {
-    console.log(`Server listening on port ${PORT}`);
+    console.log(`Server is running and listening on port ${PORT}`);
 });
