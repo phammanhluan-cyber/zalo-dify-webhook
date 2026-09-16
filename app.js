@@ -67,22 +67,25 @@ app.post('/webhook', async (req, res) => {
                     if (!jsonStr) continue;
                     const jsonData = JSON.parse(jsonStr);
                     
-                    // Bắt tất cả các loại sự kiện trả về của Agent App trong Dify
-                    if (jsonData.event === 'agent_message' && jsonData.answer) {
+                    // In ra log Render để kiểm tra cấu trúc thực tế của Dify Agent
+                    console.log("Dify Stream Event:", jsonData.event, JSON.stringify(jsonData));
+
+                    // Lấy dữ liệu từ bất kỳ trường nào Dify trả về nội dung
+                    if (jsonData.answer) {
                         botReply += jsonData.answer;
-                    } else if (jsonData.event === 'message' && jsonData.answer) {
-                        botReply += jsonData.answer;
-                    } else if (jsonData.answer) {
-                        botReply += jsonData.answer;
+                    } else if (jsonData.message) {
+                        botReply += jsonData.message;
                     } else if (jsonData.text) {
                         botReply += jsonData.text;
+                    } else if (jsonData.thought) {
+                        botReply += jsonData.thought;
                     }
                 } catch (e) {}
             }
         }
 
         if (!botReply) {
-            botReply = "Dify đã xử lý xong nhưng không tìm thấy dữ liệu text trả về. Anh kiểm tra lại tài liệu vector hoặc prompt trong Dify nhé.";
+            botReply = "Đã nhận phản hồi từ Dify nhưng chưa trích xuất được text. Anh xem tab Logs trên Render để xem chi tiết cấu trúc nhé.";
         }
 
         await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
