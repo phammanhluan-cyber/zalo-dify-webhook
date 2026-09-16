@@ -41,7 +41,7 @@ app.post('/webhook', async (req, res) => {
         const payload = {
             inputs: {},
             query: userMessage,
-            response_mode: 'streaming', // Agent Chat App bắt buộc phải dùng streaming
+            response_mode: 'streaming',
             user: String(chatId)
         };
 
@@ -59,22 +59,30 @@ app.post('/webhook', async (req, res) => {
 
         let botReply = '';
         const lines = difyResponse.data.split('\n');
+        
         for (const line of lines) {
             if (line.startsWith('data: ')) {
                 try {
-                    const jsonData = JSON.parse(line.substring(6));
-                    // Hứng cả dữ liệu từ answer hoặc event kiểu message/agent_thought của Agent
-                    if (jsonData.answer) {
+                    const jsonStr = line.substring(6).trim();
+                    if (!jsonStr) continue;
+                    const jsonData = JSON.parse(jsonStr);
+                    
+                    // Bắt tất cả các loại sự kiện trả về của Agent App trong Dify
+                    if (jsonData.event === 'agent_message' && jsonData.answer) {
                         botReply += jsonData.answer;
                     } else if (jsonData.event === 'message' && jsonData.answer) {
                         botReply += jsonData.answer;
+                    } else if (jsonData.answer) {
+                        botReply += jsonData.answer;
+                    } else if (jsonData.text) {
+                        botReply += jsonData.text;
                     }
                 } catch (e) {}
             }
         }
 
         if (!botReply) {
-            botReply = "AI đã tiếp nhận yêu cầu nhưng chưa phản hồi nội dung. Anh kiểm tra lại cấu hình Agent trên Dify nhé.";
+            botReply = "Dify đã xử lý xong nhưng không tìm thấy dữ liệu text trả về. Anh kiểm tra lại tài liệu vector hoặc prompt trong Dify nhé.";
         }
 
         await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
