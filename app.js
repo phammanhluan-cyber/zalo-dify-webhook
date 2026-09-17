@@ -8,6 +8,9 @@ const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const DIFY_API_KEY = process.env.DIFY_API_KEY;
 const DIFY_API_URL = process.env.DIFY_API_URL || 'https://api.dify.ai/v1';
 
+// Bộ nhớ tạm lưu conversation_id theo từng chatId của Telegram
+const sessions = {};
+
 async function getTelegramFileUrl(fileId) {
     const res = await axios.get(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getFile?file_id=${fileId}`);
     const filePath = res.data.result.file_path;
@@ -57,12 +60,18 @@ app.post('/webhook', async (req, res) => {
 
         console.log(`Xử lý yêu cầu từ [ChatID: ${chatId}]: ${userMessage}`);
 
+        // Chuẩn bị payload gửi sang Dify
         const payload = {
             inputs: {},
             query: userMessage,
             response_mode: 'streaming',
             user: String(chatId)
         };
+
+        // Nếu trước đó đã có conversation_id của chatId này, truyền vào để nối tiếp ngữ cảnh
+        if (sessions[chatId]) {
+            payload.conversation_id = sessions[chatId];
+        }
 
         if (filesArray.length > 0) {
             payload.files = filesArray;
@@ -86,6 +95,11 @@ app.post('/webhook', async (req, res) => {
                     if (!jsonStr) continue;
                     const jsonData = JSON.parse(jsonStr);
                     
+                    // Bắt và lưu lại conversation_id do Dify trả về
+                    if (jsonData.conversation_id) {
+                        sessions[chatId] = jsonData.conversation_id;
+                    }
+
                     if (jsonData.answer) {
                         botReply += jsonData.answer;
                     } else if (jsonData.message) {
